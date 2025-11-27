@@ -16,3 +16,7 @@ Images need to be 320x240 RGBA2222 format. ie, 76,800 bytes in size.
 Place the `slider.bin` file on the SD card, plus the `puzzle` folder at the same level of the SD card.
 
 Run `slider`.
+
+![](./slider1.png)
+
+![](./slider2.png)
