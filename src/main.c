@@ -62,6 +62,8 @@ void doExit(void);
 void redrawBitmaps(void);
 void scrollH(uint8_t hNum);
 void scrollV(uint8_t vNum);
+void scrollHrev(uint8_t hNum);
+void scrollVrev(uint8_t vNum);
 void vdp_capture_bitmap(void);
 void makeLabel(uint16_t id, char name[],uint16_t xxx, uint16_t yyy );
 void hideSprites(void);
@@ -158,7 +160,8 @@ uint8_t menuScreen(void){
   vdp_set_text_colour(BRIGHT_YELLOW);
   printf("Q to Give up\n\n");
   printf("            ESC to exit program\n\n");
-  printf("            1-4 & A-B to scroll\n\n\n\n");
+  printf("            1-4 & A-B to scroll\n\n");
+  printf("            SHIFT reverse direction\n\n");
 
   vdp_cursor_tab(0,20);
   vdp_set_text_colour(BRIGHT_BLUE);
@@ -255,10 +258,22 @@ uint8_t gameScreen(void){
     if(kCode == 'c') scrollH(2);   // scroll a line
     if(kCode == 'd') scrollH(3);   // scroll a line
 
+    if(kCode == 'A') scrollHrev(0);   // scroll a line
+    if(kCode == 'B') scrollHrev(1);   // scroll a line
+    if(kCode == 'C') scrollHrev(2);   // scroll a line
+    if(kCode == 'D') scrollHrev(3);   // scroll a line
+
     if(kCode == '1') scrollV(0);   // scroll a column
     if(kCode == '2') scrollV(1);   // scroll a column
     if(kCode == '3') scrollV(2);   // scroll a column
     if(kCode == '4') scrollV(3);   // scroll a column
+
+    if(kCode == '!') scrollVrev(0);   // scroll a column
+    if(kCode == '@') scrollVrev(1);   // scroll a column
+    if(kCode == 34) scrollVrev(1);    // scroll a column " char non-international keyboards may need this
+    if(kCode == 163) scrollVrev(2);   // scroll a column £ char
+    if(kCode == '#') scrollVrev(2);   // scroll a column
+    if(kCode == '$') scrollVrev(3);   // scroll a column
 
     if(kCode == 27) doExit();   // exit if ESC pressed
     if(kCode == 'q') return 0;   // end game, go to menu screen
@@ -414,6 +429,35 @@ void scrollH(uint8_t hNum){
   redrawBitmaps();
 
 }
+// -----------------------------------------------------------------------
+
+void scrollHrev(uint8_t hNum){
+  vdp_waitKeyUp();
+
+ // capture bitmap
+  captureBitmapH( hNum);
+  vdp_select_bitmap(captureBitmapID);
+
+// play sound
+  vdp_audio_play_sample(3,127);
+ 
+// animate bitmap
+  for (uint16_t xx = 0; xx <= chunkSizeW ; xx += scrollJump){
+      vdp_plot_bitmap( 0 - xx , hNum * chunkSizeH);          // plot the bitmap at 0,0
+      vdp_plot_bitmap( 320 -xx - bitmapWidth , hNum * chunkSizeH);          // plot the bitmap at 0,0
+      delay(scrollSpeed);
+  }
+
+  // grab id of each bitmap in row and transfer to next position
+  // we get column number from 0-3
+  uint8_t temp = arrayBitmaps[0][hNum];
+  arrayBitmaps[0][hNum] = arrayBitmaps[1][hNum];
+  arrayBitmaps[1][hNum] = arrayBitmaps[2][hNum];
+  arrayBitmaps[2][hNum] = arrayBitmaps[3][hNum];
+  arrayBitmaps[3][hNum] = temp;
+  redrawBitmaps();
+
+}
 
 // -----------------------------------------------------------------------
 
@@ -442,6 +486,37 @@ void scrollV(uint8_t vNum){
   arrayBitmaps[vNum][2] = arrayBitmaps[vNum][1];
   arrayBitmaps[vNum][1] = arrayBitmaps[vNum][0];
   arrayBitmaps[vNum][0] = temp;
+  redrawBitmaps();
+
+}
+
+// -----------------------------------------------------------------------
+
+void scrollVrev(uint8_t vNum){
+  vdp_waitKeyUp();
+
+   // capture bitmap
+  captureBitmapV( vNum);
+  vdp_select_bitmap(captureBitmapID);
+
+  // play sound
+  vdp_audio_play_sample(3,127);
+
+// animate bitmap
+  for (uint16_t yy = 0; yy <= chunkSizeH ; yy += scrollJump){
+      vdp_plot_bitmap(vNum * chunkSizeW,  0 - yy );          // plot the bitmap at 0,0
+      vdp_plot_bitmap(vNum * chunkSizeW,  240 - yy - bitmapHeight );          // plot the bitmap at 0,0
+      delay(scrollSpeed);
+  }
+
+  // grab id of each itmap in row and transfer to next position
+  // we get row number from 0-3
+
+  uint8_t temp = arrayBitmaps[vNum][0];
+  arrayBitmaps[vNum][0] = arrayBitmaps[vNum][1];
+  arrayBitmaps[vNum][1] = arrayBitmaps[vNum][2];
+  arrayBitmaps[vNum][2] = arrayBitmaps[vNum][3];
+  arrayBitmaps[vNum][3] = temp;
   redrawBitmaps();
 
 }
