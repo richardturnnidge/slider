@@ -3,7 +3,8 @@ Example of:
   1) using a buffer to store a large RGBA2222 colour bitmap 
   2) load in chunks from file
   3) used buffer commands to split a buffer horizontally
-  4) use screen capture to bitmap function (currently missing from vdp.h)
+  4) use screen capture to bitmap function
+  5) use transformations to scale and rotate icons
 */
 
 #include <stdint.h>
@@ -18,12 +19,27 @@ Example of:
 #include "woosh.h"
 #include "completed.h"
 
+// experimental use of inline escape codes to change text colour
+// all BRIGHT versions of the colour
+#define TEXT_RED "\x11\x09"
+#define TEXT_GREEN "\x11\x0A"
+#define TEXT_BLUE "\x11\x0C"
+#define TEXT_YELLOW "\x11\x0B"
+#define TEXT_MAGENTA "\x11\x0D"
+#define TEXT_CYAN "\x11\x0E"
+#define TEXT_WHITE "\x11\x0F"
+
 // constants used
 const uint8_t  screen_mode = 8;
 const uint8_t  RGBA2222_format = 1;
 const uint8_t  captureBitmapID = 30;
 const uint16_t startBitmapID = 40;
 const uint16_t startBigBitmapID = 20;
+const uint16_t startIconBitmapID = 100;
+const uint16_t spinIconID = 200;
+const uint16_t transformID = 98;
+const uint16_t spinTransformID = 97;
+const uint16_t tempBigBitmapID = 99;
 const uint16_t bitmapWidth = 320;
 const uint16_t bitmapHeight = 240;
 const uint16_t chunksPerLine = 4;
@@ -36,6 +52,8 @@ const uint16_t numCells = 16;
 const uint16_t hCells = 4;
 const uint16_t vCells = 4;
 const uint16_t numSprites = 8;
+const uint16_t maxPuzzles = 12;
+
 
 // for file handling
 DIR handle;
@@ -43,10 +61,11 @@ FILINFO file;
 
 // some global variables used
 char dirpath[256];
-char myFiles[10][32];
+char myFiles[16][32];
 char fname[32];
-char directoryName[] = "puzzles/";
+char directoryName[] = "/puzzles/";
 char buff[320*60];
+//char bigBuff[320*240];
 uint8_t arrayBitmaps[4][4];           // which bitmap is in each cell 0-15
 uint8_t arrayOriginal[4][4];           // which bitmap is in each cell 0-15
 uint8_t numPuzzles = 0;
@@ -64,13 +83,18 @@ void scrollH(uint8_t hNum);
 void scrollV(uint8_t vNum);
 void scrollHrev(uint8_t hNum);
 void scrollVrev(uint8_t vNum);
-void vdp_capture_bitmap(void);
+void my_vdp_capture_bitmap(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right, uint8_t bitmapID);
 void makeLabel(uint16_t id, char name[],uint16_t xxx, uint16_t yyy );
 void hideSprites(void);
 void showSprites(void);
 void setupUDG(void);
 void shufflePic(uint8_t level);
 void loadLabels(void);
+uint8_t load_big_puzzles(void);
+void drawRect(uint8_t rectNum);
+uint8_t imagePicker(int8_t curImage);
+void putWord(uint16_t theWord);
+void spinOut(uint8_t icon);
 
 // now the main program
 int main(void) {
@@ -94,29 +118,13 @@ int main(void) {
   vdp_audio_load_sample( -2, 14632, completed); // Load the audio sample                               
   vdp_audio_set_waveform( 4,  -2);              // set sample in bufferID 64255 (-2) to channel 4
       
-  // check for folder of puzzle images
-  if(ffs_getcwd(dirpath, 256) != 0) {
-    printf("Unable to get current directory\r\n");
-    return 0;
-  }
+  numPuzzles = load_big_puzzles();
 
-  strcat(dirpath, "puzzles/");        // look in subn-directory 'puzzles/'
-  if(ffs_dopen(&handle, dirpath) != 0) {
-    printf("Unable to open '%s'\r\n", dirpath);
-    return 0;
+  if(numPuzzles == 0){
+    printf("No puzzles found");
+    doExit();
   }
-  uint8_t fileCount=0;
-  while(1) {
-    uint8_t result = ffs_dread(&handle, &file); 
-    if((result != 0) || (strlen(file.fname) == 0)) break; // end of list
-    if(fileCount > 9) break;                              // we already have enough files
-    if(file.fattrib & 0x10) printf("DIR %s\r\n", file.fname); // dir not a file
-    else {
-      strcpy(myFiles[fileCount], file.fname);             // add this file
-      fileCount++;
-    }
-    numPuzzles = fileCount ;
-  }
+  printf("%d puzzles found",numPuzzles);
 
   // get first default file loaded
   char thisFile[32];
@@ -135,6 +143,153 @@ int main(void) {
 
   return 0;     // exit to MOS
 }
+
+uint8_t load_big_puzzles(void){
+  // count number puzzles
+  // load big pics to make icons
+
+   // check for folder of puzzle images
+  if(ffs_getcwd(dirpath, 256) != 0) {
+    printf("Unable to get current directory\r\n");
+    return 0;
+  }
+
+  strcat(dirpath, "/puzzles/");        // look in sub-directory 'puzzles/'
+  if(ffs_dopen(&handle, dirpath) != 0) {
+    printf("Unable to open '%s'\r\n", dirpath);
+    return 0;
+  }
+
+  uint8_t fileCount=0;
+  while(1) {
+    uint8_t result = ffs_dread(&handle, &file); 
+    if((result != 0) || (strlen(file.fname) == 0)) break;   // end of list
+    if(fileCount > maxPuzzles) break;                       // we already have enough files
+    if(file.fattrib & 0x10) {
+      // dir not a file
+    }
+    else if(file.fname[0]=='.'){
+      // hidden mac file
+    } else {
+      strcpy(myFiles[fileCount], file.fname);             // add this file
+      fileCount++;
+    }
+    numPuzzles = fileCount ;
+  }
+
+    
+  vdp_adv_clear_buffer(98);     // clear just in case
+
+  vdp_set_variable(1,1);        // enable fancy scaling buffer commands
+
+  // create the transform matrix to be used to scale icon images
+  // this is not in vdp.h yet
+
+  // Commands 32 and 33: Create or manipulate a 2D or 3D affine transformation matrix
+  // VDU 23, 0, &A0, bufferId; 32, operation, [<format>, <arguments...>]
+
+  putchar(23);      // vdu buffer command
+  putchar(0);
+  putchar(0xA0);
+
+  putchar(98);      // transform ID word 98
+  putchar(0);
+
+  putchar(32);      // command no 32
+
+  putchar(5);       // operation 5=scale
+
+  putchar(0x03 | 0x40 | 0x80);    // format fixed point, 16 bit, shift point x 3.
+
+  putchar(0x02);       // arguments x scale - should be 1/8 scale
+  putchar(0x00);    // arguments
+
+  putchar(0x02);    // arguments y scale
+  putchar(0x00);    // arguments
+
+ 
+
+
+  // iterate through all images
+  for (uint8_t pc=0; pc <numPuzzles ; pc++){
+
+  char thisFile[32];
+  strcpy(thisFile, directoryName);              // directory name 'puzzles/'
+  strcat(thisFile, myFiles[pc]);  // add current file name
+  strcpy(fname, thisFile);                      // put into fname
+  // loadBitmaps(fname);                           // load this bitmap
+
+
+    vdp_adv_clear_buffer(tempBigBitmapID);                         // clear the buffer
+    printf("Scanning file %s\r\n", fname); // dir not a file
+
+
+
+    FILE *filePointer = fopen(fname, "r");                        // open the RGBA2222 image file
+    uint16_t count = 0;
+
+    if (filePointer == NULL){
+      printf("Error opening file %s\r\n", fname); // dir not a file
+    }
+      
+    // load and create big bitmap in small chuncks
+
+    fread(buff, 1,320*60 ,filePointer);                               // read 80 byte chunk of data from file
+    vdp_adv_write_block_data(tempBigBitmapID, 320*60, buff);        // send chunk into VDP buffer block 20 +
+    fread(buff, 1,320*60 ,filePointer);                               // read 80 byte chunk of data from file
+    vdp_adv_write_block_data(tempBigBitmapID, 320*60, buff);        // send chunk into VDP buffer block 20 +
+    fread(buff, 1,320*60 ,filePointer);                               // read 80 byte chunk of data from file
+    vdp_adv_write_block_data(tempBigBitmapID, 320*60, buff);        // send chunk into VDP buffer block 20 +
+    fread(buff, 1,320*60 ,filePointer);                               // read 80 byte chunk of data from file
+    vdp_adv_write_block_data(tempBigBitmapID, 320*60, buff);        // send chunk into VDP buffer block 20 +
+   
+    vdp_adv_consolidate(tempBigBitmapID);                          // consolidate all uploaded chunks into single buffer
+    vdp_adv_select_bitmap(tempBigBitmapID);                             // select bitmap ID
+    vdp_adv_bitmap_from_buffer(320 , 240, RGBA2222_format);             // make a bitmap 
+
+    vdp_adv_select_bitmap(tempBigBitmapID);                        // select bitmap ID      
+
+    fclose(filePointer);    // close the file as we are done with it
+
+    // create icon version and store in a buffer
+    // not in vdp.h yet
+    // Command 40: Create a transformed bitmap
+    // VDU 23, 0, &A0, bufferId; 40, options, transformBufferId; sourceBitmapId; [width; height;]
+
+    putch(23);      // vdu buffer command
+    putch(0);
+    putch(0xA0);
+
+    putch(startIconBitmapID + pc);      // minibitmap ID
+    putch(0);       // word
+
+    putch(40);      // command
+
+    putch(1);      // options; resize 1
+
+    putch(98);      // transform matrix buffer ID
+    putch(0);       // word
+
+    putch(tempBigBitmapID);      // source bitmap ID
+    putch(0);       // word
+
+    // clear original data as no longer needed
+    vdp_adv_clear_buffer(tempBigBitmapID);                         // clear the buffer
+
+        vdp_audio_play_note(0,127,400 + (pc * 24),60);
+  }
+
+  return numPuzzles;
+
+}
+
+void putWord(uint16_t theWord){
+  uint8_t lsb = theWord %256;
+  uint8_t msb = theWord >> 8;
+  putch(lsb);       // LSB byte
+  putch(msb);       // MSB byte
+}
+
 
 // -----------------------------------------------------------------------
 //
@@ -163,28 +318,21 @@ uint8_t menuScreen(void){
   printf("            1-4 & A-B to scroll\n\n");
   printf("            SHIFT reverse direction\n\n");
 
-  vdp_cursor_tab(0,20);
-  vdp_set_text_colour(BRIGHT_BLUE);
-
-  printf("            A%c X X X X\n\n", 128);
-  printf("            B%c X X X X\n\n", 128);
-  printf("            C%c X X X X\n\n", 128);
-  printf("            D%c X X X X\n\n", 128);
-
-
   vdp_cursor_tab(0,17);
-  vdp_set_text_colour(BRIGHT_CYAN);
 
-  printf("               1 2 3 4\n");
-  printf("               %c %c %c %c \n\n", 129, 129, 129, 129);
-  printf("            A%c\n\n",128);
-  printf("            B%c\n\n",128);
-  printf("            C%c\n\n",128);
-  printf("            D%c\n\n",128);
+  // experimental inline text colour change
+  printf("             " TEXT_CYAN "  1 2 3 4\n");
+  printf("             " TEXT_CYAN "  %c %c %c %c \n\n", 129, 129, 129, 129);
+  printf("            " TEXT_CYAN "A%c " TEXT_BLUE "X X X X\n\n", 128);
+  printf("            " TEXT_CYAN "B%c " TEXT_BLUE "X X X X\n\n", 128);
+  printf("            " TEXT_CYAN "C%c " TEXT_BLUE "X X X X\n\n", 128);
+  printf("            " TEXT_CYAN "D%c " TEXT_BLUE "X X X X\n\n", 128);
 
-  vdp_set_text_colour(BRIGHT_WHITE);
-  vdp_cursor_tab(0,29);
-  printf("Puzzle: %s             " ,myFiles[currentPuzzleNum]);
+  vdp_set_text_colour(BRIGHT_BLACK);
+  vdp_cursor_tab(8,29);
+  //printf("Puzzle: %s             " ,myFiles[currentPuzzleNum]);
+  printf("\xA9 Richard Turnnidge 2025");  // \u00A9 is ©
+  vdp_set_text_colour(BRIGHT_WHITE); 
 
   while(true) {
     if(vdp_getKeyCode() == 27) doExit();   // exit if ESC pressed
@@ -197,21 +345,270 @@ uint8_t menuScreen(void){
     if(vdp_getKeyCode() == '7') return 7;   
     if(vdp_getKeyCode() == '8') return 8;   
     if(vdp_getKeyCode() == '9') return 9;   
-    if(vdp_getKeyCode() == 's') {           // find next bitmap file
+    // if(vdp_getKeyCode() == 's') {           // find next bitmap file
+    //   char thisFile[32];
+    //   currentPuzzleNum ++;
+    //   if (currentPuzzleNum > numPuzzles-1) currentPuzzleNum = 0;
+    //   strcpy(thisFile, directoryName);
+    //   strcat(thisFile, myFiles[currentPuzzleNum]);
+    //   strcpy(fname, thisFile);
+    //   vdp_cursor_tab(0,29);
+    //   printf("Puzzle: %s            " ,myFiles[currentPuzzleNum]);
+    //   loadBitmaps(fname);         // reload data
+    //   vdp_waitKeyUp();
+    // };   
+     if(vdp_getKeyCode() == 's') {
       char thisFile[32];
-      currentPuzzleNum ++;
-      if (currentPuzzleNum > numPuzzles-1) currentPuzzleNum = 0;
+      currentPuzzleNum = imagePicker(currentPuzzleNum);  
       strcpy(thisFile, directoryName);
       strcat(thisFile, myFiles[currentPuzzleNum]);
       strcpy(fname, thisFile);
       vdp_cursor_tab(0,29);
       printf("Puzzle: %s            " ,myFiles[currentPuzzleNum]);
       loadBitmaps(fname);         // reload data
-      vdp_waitKeyUp();
-    };   
-    
+
+      vdp_clear_screen();
+
+      vdp_cursor_tab(0,1);
+      vdp_set_text_colour(BRIGHT_RED);
+      printf("            S L I D E R\n\n\n");
+      vdp_set_text_colour(BRIGHT_WHITE);
+      printf("     Press:");
+      vdp_set_text_colour(BRIGHT_YELLOW);
+      printf(" 1 - 9 for level\n\n");
+      printf("            S to Swap puzzle\n\n");
+
+      vdp_set_text_colour(BRIGHT_WHITE);
+      printf("   In game: ");
+      vdp_set_text_colour(BRIGHT_YELLOW);
+      printf("Q to Give up\n\n");
+      printf("            ESC to exit program\n\n");
+      printf("            1-4 & A-B to scroll\n\n");
+      printf("            SHIFT reverse direction\n\n");
+
+      vdp_cursor_tab(0,17);
+
+      // experimental inline text colour change
+      printf("             " TEXT_CYAN "  1 2 3 4\n");
+      printf("             " TEXT_CYAN "  %c %c %c %c \n\n", 129, 129, 129, 129);
+      printf("            " TEXT_CYAN "A%c " TEXT_BLUE "X X X X\n\n", 128);
+      printf("            " TEXT_CYAN "B%c " TEXT_BLUE "X X X X\n\n", 128);
+      printf("            " TEXT_CYAN "C%c " TEXT_BLUE "X X X X\n\n", 128);
+      printf("            " TEXT_CYAN "D%c " TEXT_BLUE "X X X X\n\n", 128);
+
+      vdp_cursor_tab(8,29);
+      vdp_set_text_colour(BRIGHT_BLACK); 
+            //printf("Puzzle: %s             " ,myFiles[currentPuzzleNum]);
+      printf("\xA9 Richard Turnnidge 2025");  // \u00A9 is ©
+      vdp_set_text_colour(BRIGHT_WHITE); 
+
+     }
+
   }
 }
+
+// -----------------------------------------------------------------------
+//
+// image picker - choose puzzle picture
+//
+// -----------------------------------------------------------------------
+
+uint8_t imagePicker(int8_t curImage){
+  // arrive with current image number highlighted
+  hideSprites();
+  vdp_clear_screen();
+  vdp_cursor_tab(0,1);
+  vdp_set_text_colour(BRIGHT_WHITE);
+  printf("Select Picture %c %c then ENTER\n\n", 130, 131);
+
+  // draw thumbnails
+  for (uint8_t xx = 0; xx < numPuzzles ; xx++){
+      uint8_t xpos = xx % 4;
+      uint8_t ypos = xx / 4;
+
+      vdp_adv_select_bitmap(startIconBitmapID + xx);
+      vdp_plot_bitmap(xpos * 80, 24 +(ypos * 60));
+
+  }
+  drawRect(curImage);
+  vdp_cursor_tab(0,29);
+  printf("Puzzle: %s             " ,myFiles[curImage]);
+  while(true) {
+
+    if(vdp_getKeyCode() == 27) doExit();   // exit if ESC pressed
+    if(vdp_getKeyCode() == 8) {         // prev image
+        vdp_audio_play_note(0,127,500,50);
+        curImage --;
+        if (curImage < 0) curImage = numPuzzles -1;
+        drawRect(curImage);
+          vdp_set_text_colour(BRIGHT_WHITE);
+          vdp_cursor_tab(0,29);
+          printf("Puzzle: %s             " ,myFiles[curImage]);
+        vdp_waitKeyUp();
+    }
+    if(vdp_getKeyCode() == 21) {         // next image
+      vdp_audio_play_note(0,127,600,50);
+        curImage ++;
+        if (curImage > numPuzzles -1) curImage = 0;
+        drawRect(curImage);
+          vdp_set_text_colour(BRIGHT_WHITE);
+          vdp_cursor_tab(0,29);
+          printf("Puzzle: %s             " ,myFiles[curImage]);
+         vdp_waitKeyUp();
+    }
+    //vdp_cursor_tab(0,10);
+    //printf("code=%d   ",vdp_getKeyCode());
+    if(vdp_getKeyCode() == 13) {
+      vdp_audio_play_note(0,127,800,80);
+      break;        // ENTER
+    }
+  }
+
+  spinOut(curImage);
+  return curImage;
+
+}
+
+// -----------------------------------------------------------------------
+// just draw the rectangles around the icons
+
+void drawRect(uint8_t rectNum){
+  uint8_t xpos ;
+  uint8_t ypos ;
+
+  // clear old rect
+  vdp_set_graphics_fg_colour(0,0);
+  for (uint8_t xx = 0; xx < numPuzzles ; xx++){
+    xpos = xx % 4;
+    ypos = xx / 4;
+    vdp_rectangle( xpos * 80 ,24 +(ypos * 60), (xpos * 80 ) + 80 , 60 + 24 +(ypos * 60));
+    vdp_rectangle( (xpos * 80) + 1 ,24 -1 +(ypos * 60), (xpos * 80) - 1 + 80 , 60 + 24 -1  +(ypos * 60));
+  }
+  //plot new single rect
+  vdp_set_graphics_fg_colour(0,BRIGHT_RED);
+  xpos = rectNum % 4;
+  ypos = rectNum / 4;
+  vdp_rectangle( (xpos * 80) + 1 ,24 -1 +(ypos * 60), (xpos * 80) - 1 + 80 , 60 + 24 -1  +(ypos * 60));
+  vdp_rectangle( (xpos * 80)  ,24  +(ypos * 60), (xpos * 80)  + 80 , 60 + 24   +(ypos * 60));
+
+}
+
+// -----------------------------------------------------------------------
+// spin out selected icon
+
+void spinOut(uint8_t icon){
+
+  uint16_t startX = icon % 4;
+  uint16_t startY = icon / 4;
+
+  vdp_adv_select_bitmap(startIconBitmapID + icon);
+  // vdp_plot_bitmap(xpos * 80, 24 +(ypos * 60));
+
+  for(uint8_t n=1; n<10; n++){              // spin out here
+
+    vdp_adv_clear_buffer(spinIconID);         // clear the transform buffer
+    vdp_adv_clear_buffer(97);         // clear the transform buffer
+
+
+        // create spinout transformation- part 1: rotation
+// Commands 32 and 33: Create or manipulate a 2D or 3D affine transformation matrix
+  // VDU 23, 0, &A0, bufferId; 32, operation, [<format>, <arguments...>]
+
+  putchar(23);      // vdu buffer command
+  putchar(0);
+  putchar(0xA0);
+
+  putchar(97);      // transform ID word 97 spinout
+  putchar(0);
+
+  putchar(32);      // command no 32
+
+  putchar(2);       // operation 3=rotate rads 2=deg
+
+  putchar(0x00 | 0x40 | 0x80);    // format fixed point, 16 bit, shift point x 0.
+
+  uint8_t a = (n * 40) % 256;   // try to do 1 full rotation
+  uint8_t b = (n * 40) / 256;
+
+  putchar(a);       // arguments angle 1 deg
+  putchar(b);    // arguments
+
+
+  // create spinout transformation- part 2: scale
+  // Commands 32 and 33: Create or manipulate a 2D or 3D affine transformation matrix
+    // VDU 23, 0, &A0, bufferId; 32, operation, [<format>, <arguments...>]
+
+    putchar(23);      // vdu buffer command
+    putchar(0);
+    putchar(0xA0);
+
+    putchar(97);      // transform ID word 98
+    putchar(0);
+
+    putchar(32);      // command no 32
+
+    putchar(5);       // operation 5=scale
+
+    putchar(0x02 | 0x40 | 0x80);    // format fixed point, 16 bit, shift point x 1.
+
+    putchar(n + 3);       // arguments x scale - should be 1.5 x n
+    putchar(0x00);    // arguments
+
+    putchar(n +3);    // arguments y scale
+    putchar(0x00);    // arguments
+
+
+
+
+
+
+
+    // create the bitmap
+
+  putch(23);      // vdu buffer command
+  putch(0);
+  putch(0xA0);
+
+  putch(spinIconID);      // minibitmap ID
+  putch(0);       // word
+
+  putch(40);      // command
+
+  putch(5);      // options; resize 1
+
+  putch(97);      // transform matrix buffer ID
+  putch(0);       // word
+
+  putch(startIconBitmapID + icon);      // source bitmap ID
+  putch(0);       // word
+
+  // putch(80 + (n * 20));      // x size
+  // putch(0);       // word
+
+  // putch(60 + (n * 20));      // y size
+  // putch(0);       // word
+
+
+  vdp_adv_select_bitmap(spinIconID);
+
+  //vdp_plot_bitmap(20 + ((10-n) * startX * 80), 44 +((10-n) * startY * 60));
+  // where it starts
+  uint16_t initx = 20 + ( startX * 80 );
+  uint16_t inity = 24 + ( startY * 60 );
+
+  // going from 1-9 positions so 10-n is inverse
+  uint16_t newx = (initx * (10-n)) / 10;
+  uint16_t newy = (inity * (10-n)) / 10;
+
+  vdp_plot_bitmap(newx, newy);
+
+  delay(80);
+
+
+  }
+
+}
+
 
 // -----------------------------------------------------------------------
 //
@@ -238,7 +635,6 @@ void initGame(uint8_t level){
   vdp_activate_sprites(numSprites);       // activate control sprites
   showSprites();                          // display controls
 }
-
 
 // -----------------------------------------------------------------------
 //
@@ -357,7 +753,6 @@ void shufflePic(uint8_t level){
     }
     delay(500);
   }
-
 }
 
 // -----------------------------------------------------------------------
@@ -368,9 +763,7 @@ void captureBitmapH(uint8_t hNum){
   uint16_t topPos = hNum * chunkSizeH;
   uint16_t bottomPos = ((hNum + 1) * chunkSizeH) - 1;
   
-  vdp_move_to( 0, topPos );             // define top left point
-  vdp_move_to( 319, bottomPos );        // define bottom right point
-  vdp_capture_bitmap();                 // capture image
+  my_vdp_capture_bitmap(topPos,0,bottomPos, 319,captureBitmapID );                 // capture image
 }
 
 // -----------------------------------------------------------------------
@@ -380,21 +773,23 @@ void captureBitmapV(uint8_t vNum){
   uint16_t leftPos = vNum * chunkSizeW;
   uint16_t rightPos = ((vNum + 1) * chunkSizeW) - 1;
   
-  vdp_move_to( leftPos, 0 );            // define top left point
-  vdp_move_to( rightPos, 239 );         // define bottom right point
-  vdp_capture_bitmap();                 // capture image
+  my_vdp_capture_bitmap(0, leftPos, 239,rightPos, captureBitmapID );                 // capture image
 }
 
 // -----------------------------------------------------------------------
 
-void vdp_capture_bitmap(void){
+void my_vdp_capture_bitmap(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right, uint8_t bmID){
+
+  vdp_move_to( left, top );            // define top left point
+  vdp_move_to( right, bottom );         // define bottom right point
+  
   // VDU 23, 27, 1, n, 0, 0;: Capture screen data into bitmap n *
   // not yet defined in vdp.h so do it with putch()
 
   putch(23);
   putch(27);
   putch(1);
-  putch(captureBitmapID);           // defined as constant
+  putch(bmID);           // defined as constant
   putch(0);
   putch(0);
   putch(0);
@@ -444,7 +839,7 @@ void scrollHrev(uint8_t hNum){
 // animate bitmap
   for (uint16_t xx = 0; xx <= chunkSizeW ; xx += scrollJump){
       vdp_plot_bitmap( 0 - xx , hNum * chunkSizeH);          // plot the bitmap at 0,0
-      vdp_plot_bitmap( 320 -xx - bitmapWidth , hNum * chunkSizeH);          // plot the bitmap at 0,0
+      vdp_plot_bitmap( 320 -xx , hNum * chunkSizeH);          // plot the bitmap at 0,0
       delay(scrollSpeed);
   }
 
@@ -505,7 +900,7 @@ void scrollVrev(uint8_t vNum){
 // animate bitmap
   for (uint16_t yy = 0; yy <= chunkSizeH ; yy += scrollJump){
       vdp_plot_bitmap(vNum * chunkSizeW,  0 - yy );          // plot the bitmap at 0,0
-      vdp_plot_bitmap(vNum * chunkSizeW,  240 - yy - bitmapHeight );          // plot the bitmap at 0,0
+      vdp_plot_bitmap(vNum * chunkSizeW,  240 - yy );          // plot the bitmap at 0,0
       delay(scrollSpeed);
   }
 
@@ -540,7 +935,7 @@ void loadBitmaps(char bitmapName[])
   // read all data into 4 bitmap buffers, in 320 byte blocks, ie 60 blocks each
   for (uint16_t rows = 0; rows < 4; rows++){
           fread(buff, 1,19200 ,filePointer);                                 // read 80 byte chunk of data from file
-          vdp_adv_write_block_data((20 + rows), 19200, buff);       // send chunk into VDP buffer block 20 +
+          vdp_adv_write_block_data((startBigBitmapID + rows), 19200, buff);       // send chunk into VDP buffer block 20 +
   }
 
   // we now have 4 big buffers 320x60 of data
@@ -593,24 +988,15 @@ void makeLabel(uint16_t id, char name[] ,uint16_t xxx, uint16_t yyy ){
   vdp_clear_sprite();
   vdp_add_sprite_bitmap(id);
 
-  // enable hardware test flag
+  // enable hardware sprite test flag
   // VDU 23, 0, &F8, 2; 1;
-  // not yet defined in vdp.h
-  putch(23);
-  putch(0);
-  putch(0xF8);
-  putch(2);
-  putch(0);
-  putch(1);
-  putch(0);
   
+  vdp_set_variable(2,1);
+
 // set to be hardware sprite
 // VDU 23, 27, 19: Set sprite to be a hardware sprite ***
-// not yet defined in vdp.h
-  putch(23);
-  putch(27);
-  putch(19);
 
+  vdp_set_hardware_sprite();
   vdp_move_sprite_to( xxx, yyy );
 }
 
@@ -630,7 +1016,7 @@ uint16_t thisBitmap = 0;
 }
 
 // -----------------------------------------------------------------------
-// sprite routines
+// hide/show routines
 
 void hideSprites(void){
   for (uint8_t xx = 0; xx < numSprites ; xx++){ 
@@ -672,7 +1058,27 @@ void setupUDG(void){
     0b01111110,
     0b00111100,
     0b00011000);
-}
+
+    vdp_redefine_character_special(130,
+    0b00010000,
+    0b00110000,
+    0b01110000,
+    0b11111111,
+    0b11111111,
+    0b01110000,
+    0b00110000,
+    0b00010000);
+
+    vdp_redefine_character_special(131,
+    0b00010000,
+    0b00011000,
+    0b00011100,
+    0b11111110,
+    0b11111110,
+    0b00011100,
+    0b00011000,
+    0b00010000);
+  }
 
 // -----------------------------------------------------------------------
 //
@@ -681,7 +1087,7 @@ void setupUDG(void){
 // -----------------------------------------------------------------------
 
 void doExit(void){
-  vdp_clear_screen();
+  //vdp_clear_screen();
   vdp_cursor_enable(true);
   exit(0);
 }
